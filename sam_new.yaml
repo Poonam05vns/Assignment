@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  # DynamoDB Table for request metadata
+  RequestMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: RequestMetadata
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # S3 Bucket for file uploads
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: file-upload-bucket
+
+  # Lambda Function for generating signed URL and saving metadata
+  GenerateSignedUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: python3.9
+      CodeUri: generate_signed_url/
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref UploadBucket
+          DYNAMODB_TABLE: !Ref RequestMetadataTable
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref UploadBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RequestMetadataTable
+      Events:
+        ApiRequest:
+          Type: Api
+          Properties:
+            Path: /generate-signed-url
+            Method: post
+
+  # Lambda function triggered by S3 upload event
+  UploadNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: notify.handler
+      Runtime: python3.9
+      CodeUri: upload_notification/
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref UploadNotificationTopic
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !Ref UploadNotificationTopic
+      Events:
+        S3UploadEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .json
+
+  # SNS Topic for "automobiles" source notifications
+  UploadNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: UploadNotification
